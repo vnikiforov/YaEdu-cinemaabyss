@@ -1,0 +1,28 @@
+@startuml
+title CineAbyss Future Structure
+
+left to right direction
+
+!includeurl lib/C4_Container.puml
+
+Person(user, "SmartHomeUser", "Пользователь Умного дома")
+
+Container(AuthSvc, "Authorization Service", "PHP/Yii", "Авторизация пользователя в системе, с использованием различных механизмов [OAuth/VK/Google/Yandex etc.]")
+Container(UI_Svc, "UI Create&Handle ", "PHP/Yii/React/JS",  "Создание внешнего представления и обработка пользовательских действий")
+Container(HW_Support_Svc, "Hardware Handling", "PHP/Python/C#", "Коммуникация с аппаратными интерфейсами оборудования Умного дома")
+Container(DB_Svc, "DataBase Center", "SQL/JSON", "Хранение данных")
+Container(API_Gate, "External API", "PHP/Python", "Интерфейс для внешних коммуникаций")
+Container(CommCenter, "Commander Center", "PHP/Python", "Маршрутизатор и исполнитель запросов")
+
+Rel(AuthSvc, DB_Svc, "Get user info - role & rights")
+Rel(AuthSvc, DB_Svc, "Save loging event to log")
+Rel(AuthSvc, UI_Svc, "Create login prompt for user's device")
+Rel(AuthSvc, CommCenter, "Notify about succesful login")
+Rel(user, CommCenter, "Users's request")
+Rel(CommCenter, AuthSvc, "Ask for session authorization")
+Rel(CommCenter, HW_Support_Svc, "Exec requested command")
+Rel(HW_Support_Svc, DB_Svc, "Save action to log")
+Rel(HW_Support_Svc, DB_Svc, "Get required refernce info")
+Rel(API_Gate, CommCenter, "Request for execute operation")
+Rel(CommCenter, UI_Svc, "Create UI for requesting device")
+@enduml
