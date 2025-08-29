@@ -5,24 +5,49 @@ left to right direction
 
 !includeurl lib/C4_Container.puml
 
-Person(user, "SmartHomeUser", "Пользователь Умного дома")
+Person(user, "CineMan", "Пользователь портала  КиноБездна")
 
-Container(AuthSvc, "Authorization Service", "PHP/Yii", "Авторизация пользователя в системе, с использованием различных механизмов [OAuth/VK/Google/Yandex etc.]")
-Container(UI_Svc, "UI Create&Handle ", "PHP/Yii/React/JS",  "Создание внешнего представления и обработка пользовательских действий")
-Container(HW_Support_Svc, "Hardware Handling", "PHP/Python/C#", "Коммуникация с аппаратными интерфейсами оборудования Умного дома")
-Container(DB_Svc, "DataBase Center", "SQL/JSON", "Хранение данных")
-Container(API_Gate, "External API", "PHP/Python", "Интерфейс для внешних коммуникаций")
-Container(CommCenter, "Commander Center", "PHP/Python", "Маршрутизатор и исполнитель запросов")
+Enterprise_Boundary(Domains, "Домены системы") {  
 
-Rel(AuthSvc, DB_Svc, "Get user info - role & rights")
-Rel(AuthSvc, DB_Svc, "Save loging event to log")
-Rel(AuthSvc, UI_Svc, "Create login prompt for user's device")
-Rel(AuthSvc, CommCenter, "Notify about succesful login")
-Rel(user, CommCenter, "Users's request")
-Rel(CommCenter, AuthSvc, "Ask for session authorization")
-Rel(CommCenter, HW_Support_Svc, "Exec requested command")
-Rel(HW_Support_Svc, DB_Svc, "Save action to log")
-Rel(HW_Support_Svc, DB_Svc, "Get required refernce info")
-Rel(API_Gate, CommCenter, "Request for execute operation")
-Rel(CommCenter, UI_Svc, "Create UI for requesting device")
+  Container_Boundary(ContolCenter, "Домен управления") {    
+    Container(AuthSvc, "Authorization Service")  
+    Container(GateAPI, "External API Gate")
+    Container(RequestsRouter, "Internal Request Router")    
+  }
+
+  Container_Boundary(UserMgmnt, "Домен пользователя") {
+    Container(UsrPrefs, "User Preferences")
+    Container(UsrFvtrs, "Favorites")
+    Container(UsrDscnt, "Discounts")
+    Container(UsrSubscrb, "Subscriptions")
+  }
+
+  Container_Boundary(MediaRegion, "Домен медиа-контента") {    
+    Container(MovieSvs, "Video and Movies Show")
+    Container_Boundary(ExtSystems, "Внешние интеграции") {    
+      System_Ext(PmntGate, "Payment System Facade")
+      System_Ext(RcmndSys, "Recomendation System")
+      System_Ext(GrdSys, "Rating System")
+    }
+  }
+
+  Container_Boundary(SysArea, "Домен системной поддержи") {    
+    Container(HwSupport, "User MediaHard")
+    Container(UiBuilder, "UI Builder System")
+    Container(LoggingSys, "Logging System")
+    ContainerQueue(QueueSvc, "Messages Broker")
+    ContainerDb(DbSvc, "DataBase System")
+  }
+}
+
+Rel(user, AuthSvc, "Get user info - role & rights")
+Rel(AuthSvc, user, "")
+Rel(user, RequestsRouter, "")
+Rel(GateAPI, AuthSvc, "")
+Rel(GateAPI, RequestsRouter, "")
+Rel(RequestsRouter, SysArea, "")
+Rel(RequestsRouter, ContolCenter, "")
+Rel(RequestsRouter, MediaRegion, "")
+Rel(RequestsRouter, UserMgmnt, "")
+
 @enduml
