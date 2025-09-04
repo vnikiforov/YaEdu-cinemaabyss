@@ -17,6 +17,7 @@ Enterprise_Boundary(Domains, "Домены системы") {
 
   Container_Boundary(UserMgmnt, "Домен пользователя") {
     Container(UsrPrefs, "User Preferences")
+    Container(ViewHstry, "Media View History")
     Container(UsrFvtrs, "Favorites")
     Container(UsrDscnt, "Discounts")
     Container(UsrSubscrb, "Subscriptions")
