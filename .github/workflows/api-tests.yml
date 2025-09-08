@@ -31,14 +31,31 @@ jobs:
 
       - name: Set up Docker Compose
         run: |
+          sudo curl -L "https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
           docker compose --version
       
-      - name: Start services with Docker Compose
+      - name: Start infrastructure services
         run: |
-          docker compose up -d
-          # Wait for services to be ready
-          echo "Waiting for services to be ready..."
-          sleep 120
+          docker compose up -d postgres zookeeper kafka
+          echo "Waiting for infrastructure to be ready..."
+          sleep 30
+      
+      - name: Start application services
+        run: |
+          docker compose up -d monolith movies-service events-service proxy-service
+          echo "Waiting for application services to be ready..."
+          sleep 30
+      
+      - name: Check services status
+        run: |
+          docker compose ps
+          echo "Checking proxy service health..."
+          curl --retry 10 --retry-delay 5 --retry-all-errors http://localhost:8000/health || echo "Proxy health check failed"
+          echo "Checking movies service..."
+          curl --retry 5 --retry-delay 3 http://localhost:8081/health || echo "Movies service health check failed"
+          echo "Checking events service..."
+          curl --retry 5 --retry-delay 3 http://localhost:8082/health || echo "Events service health check failed"
       
       - name: Set up Node.js
         uses: actions/setup-node@v3
@@ -49,22 +66,59 @@ jobs:
       
       - name: Install Newman and dependencies
         working-directory: tests/postman
-        run: npm install
+        run: |
+          npm install
+          npm install -g newman newman-reporter-htmlextra
       
-      - name: Run API tests
+      - name: Wait for proxy to be fully ready
+        run: |
+          echo "Waiting for proxy service to route requests..."
+          sleep 15
+          # Test that proxy can route to backend services
+          curl -f http://localhost:8000/api/movies || echo "Proxy routing test failed"
+          curl -f http://localhost:8000/api/events || echo "Proxy routing test failed"
+      
+      - name: Run API tests with Newman
         working-directory: tests/postman
         run: |
-
-          docker compose up -d
-          # Wait for services to be ready
-          echo "Waiting for services to be ready..."
-          sleep 15
-          # Build the Docker image
-          docker build -t cinemaabyss-api-tests .
+          echo "Running API tests against proxy service (port 8000)"
           
-          # Run the tests in Docker
-          docker run --network=cinemaabyss-network -v "$(pwd)/reports:/app/reports" cinemaabyss-api-tests
-        
+          # Запускаем тесты через proxy
+          npx newman run your-api-collection.json \
+            --env-var "baseUrl=http://localhost:8000" \
+            --reporters cli,htmlextra \
+            --reporter-htmlextra-export newman-report.html \
+            --delay-request 1000 \
+            --timeout 300000
+          
+          # Проверяем код возврата
+          if [ $? -eq 0 ]; then
+            echo "API tests passed successfully"
+          else
+            echo "API tests failed"
+            exit 1
+          fi
+      
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: newman-test-reports
+          path: tests/postman/newman-report.html
+      
+      - name: Show service logs if tests fail
+        if: failure()
+        run: |
+          echo "=== PROXY SERVICE LOGS ==="
+          docker compose logs proxy-service
+          echo "=== EVENTS SERVICE LOGS ==="
+          docker compose logs events-service
+          echo "=== MOVIES SERVICE LOGS ==="
+          docker compose logs movies-service
+          echo "=== KAFKA LOGS ==="
+          docker compose logs kafka
+          echo "=== POSTGRES LOGS ==="
+          docker compose logs postgres
       
       - name: Stop services
         if: always()
