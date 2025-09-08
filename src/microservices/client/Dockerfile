@@ -1,4 +1,5 @@
-FROM python:3.9-slim  
+FROM python:3.9-slim
+
 COPY ./app /app 
 WORKDIR /app  
 
@@ -9,6 +10,4 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-EXPOSE 8082
-
-CMD ["python", "main.py"]
+CMD ["python", "main.py"] 

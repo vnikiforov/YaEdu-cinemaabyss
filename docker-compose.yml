@@ -97,6 +97,22 @@ services:
     networks:
       - cinemaabyss-network
 
+# Test Kafka Consumer
+  kafka-test-consumer:
+    build:
+      context: ./src/microservices/client
+      dockerfile: Dockerfile
+    container_name: cinemaabyss-kafka-test-consumer
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      CONSUME_ALL: "true"
+      MAX_MESSAGES: "100"
+      # TOPIC: "movie-events"  # раскомментировать для конкретного топика
+    networks:
+      - cinemaabyss-network
+
   # Proxy Service (API Gateway)
   proxy-service:
     build:
