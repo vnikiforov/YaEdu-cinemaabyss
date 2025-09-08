@@ -168,17 +168,33 @@ jobs:
 
       - name: Run API tests
         run: |
-          echo "Running API tests against http://localhost:8000"
+          # Устанавливаем Newman с репортером
+          echo "Installing testing tools..."
+          npm install -g newman newman-reporter-htmlextra
           
-          # Проверяем доступность основных endpoint'ов
-          echo "Testing Movies API..."
-          curl -f -v http://localhost:8000/api/movies || echo "Movies API test failed"
-          
-          echo "Testing Events API..."
-          curl -f -v http://localhost:8000/api/events || echo "Events API test failed"
-          
-          # Здесь добавьте ваши реальные тестовые команды
-          # Например: npm test, pytest, или специализированные тестовые скрипты
+          # Проверяем, есть ли коллекция для тестов
+          if [ -f "api-tests-collection.json" ]; then
+            echo "Running Newman tests..."
+            newman run api-tests-collection.json \
+              --reporters cli,htmlextra \
+              --reporter-htmlextra-export test-report.html \
+              --delay-request 1000
+          else
+            echo "No Newman collection found, running basic tests..."
+            # Базовые проверки
+            curl -f http://localhost:8000/health && echo "Health: OK"
+            curl -f http://localhost:8000/api/movies && echo "Movies: OK"
+            curl -f http://localhost:8000/api/events && echo "Events: OK"
+          fi
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: api-test-reports
+          path: |
+            test-report.html
+            newman-report.html
 
       - name: Show logs if tests fail
         if: failure()
