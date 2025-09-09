@@ -166,22 +166,6 @@ jobs:
           echo "=== INFRASTRUCTURE LOGS ==="
           docker-compose logs postgres --tail=10
           docker-compose logs kafka --tail=10
-          
-          echo "=== NETWORK CONNECTIVITY ==="
-          # Проверяем могут ли сервисы общаться между собой
-          docker-compose exec monolith curl -s http://postgres:5432 || echo "Monolith -> Postgres: FAILED"
-          docker-compose exec movies-service curl -s http://postgres:5432 || echo "Movies -> Postgres: FAILED"
-
-      - name: Wait for backend services
-        run: |
-          echo "Waiting for backend services to be ready..."
-          # Ждем сначала бэкенды, потом прокси
-          sleep 40
-          
-          echo "Testing backend services directly..."
-          curl http://localhost:8080/health || echo "Monolith health: NOT READY"
-          curl http://localhost:8081/health || echo "Movies health: NOT READY"
-          curl http://localhost:8082/health || echo "Events health: NOT READY"
 
       - name: Wait for services to be ready
         run: |
@@ -200,32 +184,33 @@ jobs:
           # Даем еще немного времени для полной инициализации
           sleep 5
 
-      - name: Install Newman and dependencies
+      - name: Install Newman with compatible versions
         working-directory: tests/postman
         run: |
-          # Устанавливаем ВСЕ зависимости локально в папку tests/postman
-          npm install newman newman-reporter-htmlextra
+          # Устанавливаем совместимые версии
+          npm install newman@^6.0.0 newman-reporter-htmlextra@^1.23.0 --legacy-peer-deps
+          # Или используем force для установки
+          # npm install newman newman-reporter-htmlextra --force
 
-      - name: Run API tests
+      - name: Run API tests with compatible Newman
+        working-directory: tests/postman
         run: |
-          # Устанавливаем Newman с репортером
-          echo "Installing testing tools..."
-          npm install -g newman newman-reporter-htmlextra
+          echo "Running API tests against proxy service (port 8000)"
           
-          # Проверяем, есть ли коллекция для тестов
-          if [ -f "api-tests-collection.json" ]; then
-            echo "Running Newman tests..."
-            newman run api-tests-collection.json \
-              --env-var "baseUrl=http://localhost:8000" \
-              --reporters cli,htmlextra \
-              --reporter-htmlextra-export test-report.html \
-              --delay-request 1000
+          # Запускаем тесты через proxy
+          npx newman run CinemaAbyss.postman_collection.json \
+            --env-var "baseUrl=http://localhost:8000" \
+            --reporters cli,htmlextra \
+            --reporter-htmlextra-export newman-report.html \
+            --delay-request 1000 \
+            --timeout 300000
+          
+          # Проверяем код возврата
+          if [ $? -eq 0 ]; then
+            echo "API tests passed successfully"
           else
-            echo "No Newman collection found, running basic tests..."
-            # Базовые проверки
-            curl -f http://localhost:8000/health && echo "Health: OK"
-            curl -f http://localhost:8000/api/movies && echo "Movies: OK"
-            curl -f http://localhost:8000/api/events && echo "Events: OK"
+            echo "API tests failed"
+            exit 1
           fi
 
       - name: Upload test reports
@@ -233,25 +218,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: api-test-reports
-          path: |
-            test-report.html
-            newman-report.html
+          path: tests/postman/newman-report.html
 
       - name: Show logs if tests fail
         if: failure()
         run: |
           echo "=== PROXY SERVICE LOGS ==="
-          docker-compose -f docker-compose.yml logs proxy-service
+          docker-compose logs proxy-service
           echo "=== EVENTS SERVICE LOGS ==="
-          docker-compose -f docker-compose.yml logs events-service
+          docker-compose logs events-service
           echo "=== MOVIES SERVICE LOGS ==="
-          docker-compose -f docker-compose.yml logs movies-service
+          docker-compose logs movies-service
           echo "=== KAFKA LOGS ==="
-          docker-compose -f docker-compose.yml logs kafka
+          docker-compose logs kafka
           echo "=== POSTGRES LOGS ==="
-          docker-compose -f docker-compose.yml logs postgres
+          docker-compose logs postgres
 
       - name: Cleanup
         if: always()
         run: |
-          docker-compose -f docker-compose.yml down -v
+          docker-compose down -v
