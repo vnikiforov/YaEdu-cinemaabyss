@@ -84,7 +84,7 @@ jobs:
           echo "Running API tests against proxy service (port 8000)"
           
           # Запускаем тесты через proxy
-          npx newman run your-api-collection.json \
+          npx newman run CinemaAbyss.postman_collection.json \
             --env-var "baseUrl=http://localhost:8000" \
             --reporters cli,htmlextra \
             --reporter-htmlextra-export newman-report.html \
