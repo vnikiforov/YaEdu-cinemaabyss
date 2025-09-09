@@ -200,6 +200,12 @@ jobs:
           # Даем еще немного времени для полной инициализации
           sleep 5
 
+      - name: Install Newman and dependencies
+        working-directory: tests/postman
+        run: |
+          # Устанавливаем ВСЕ зависимости локально в папку tests/postman
+          npm install newman newman-reporter-htmlextra
+
       - name: Run API tests
         run: |
           # Устанавливаем Newman с репортером
