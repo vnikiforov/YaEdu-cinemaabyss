@@ -153,6 +153,36 @@ jobs:
           docker-compose -f docker-compose.yml up -d
           sleep 15
 
+      - name: Check services status and logs
+        run: |
+          echo "=== SERVICES STATUS ==="
+          docker-compose ps
+          
+          echo "=== BACKEND SERVICES LOGS ==="
+          docker-compose logs monolith --tail=20
+          docker-compose logs movies-service --tail=20
+          docker-compose logs events-service --tail=20
+          
+          echo "=== INFRASTRUCTURE LOGS ==="
+          docker-compose logs postgres --tail=10
+          docker-compose logs kafka --tail=10
+          
+          echo "=== NETWORK CONNECTIVITY ==="
+          # Проверяем могут ли сервисы общаться между собой
+          docker-compose exec monolith curl -s http://postgres:5432 || echo "Monolith -> Postgres: FAILED"
+          docker-compose exec movies-service curl -s http://postgres:5432 || echo "Movies -> Postgres: FAILED"
+
+      - name: Wait for backend services
+        run: |
+          echo "Waiting for backend services to be ready..."
+          # Ждем сначала бэкенды, потом прокси
+          sleep 40
+          
+          echo "Testing backend services directly..."
+          curl http://localhost:8080/health || echo "Monolith health: NOT READY"
+          curl http://localhost:8081/health || echo "Movies health: NOT READY"
+          curl http://localhost:8082/health || echo "Events health: NOT READY"
+
       - name: Wait for services to be ready
         run: |
           echo "Waiting for services to be ready..."
