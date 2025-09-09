@@ -2,9 +2,9 @@ name: API Tests
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, cinema ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, cinema ]
   workflow_dispatch:
     inputs:
       environment:
@@ -64,11 +64,25 @@ jobs:
           cache: 'npm'
           cache-dependency-path: tests/postman/package-lock.json
       
-      - name: Install Newman and dependencies
+      - name: Install global Newman dependencies
+        run: |
+          npm install -g newman newman-reporter-htmlextra
+      
+      - name: Install local dependencies
         working-directory: tests/postman
         run: |
           npm install
-          npm install -g newman newman-reporter-htmlextra
+      
+      - name: Check if Postman collection exists
+        working-directory: tests/postman
+        run: |
+          if [ ! -f "CinemaAbyss.postman_collection.json" ]; then
+            echo "ERROR: Postman collection file not found!"
+            echo "Available files:"
+            ls -la
+            exit 1
+          fi
+          echo "Postman collection found: CinemaAbyss.postman_collection.json"
       
       - name: Wait for proxy to be fully ready
         run: |
