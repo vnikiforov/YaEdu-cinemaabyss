@@ -1,7 +1,7 @@
 import os
 import requests
 import random
-from flask import Flask, request, Response
+from flask import Flask, request, Response, jsonify
 
 CINE_ABYS_PROXY_NAME = "CineAbysProxy/1.0"
 PROXING_REQUEST_TIMEOUT = 30
@@ -10,8 +10,11 @@ __app = Flask(__name__)
 
 mvs_requests_percentag = 0 # Процент запросов, напралямых на сервис movies - по умолчанию НИЧЕГО!
 
-if os.getenv("GRADUAL_MIGRATION").lower() == "true" :
-    mvs_requests_percentag = int(os.environ["MOVIES_MIGRATION_PERCENT"])
+if os.getenv("GRADUAL_MIGRATION"):
+    migartion_level = os.getenv("GRADUAL_MIGRATION") or ''
+    
+    if migartion_level.lower() == "true" :
+        mvs_requests_percentag = int(os.environ["MOVIES_MIGRATION_PERCENT"])
 
 SERVER_CONFIG = {
     os.environ["MOVIES_SERVICE_URL"] : mvs_requests_percentag,    
@@ -40,15 +43,22 @@ def modify_request_headers(headers, target_server):
 
 @__app.route('/health')
 def health_check():
-    return "Proxy service is Online"
+    return jsonify({"status": True})
 
-@__app.route('/', defaults={'path': ''})
-@__app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
+@__app.route('/api', defaults={'path': ''})
+@__app.route('/api/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
 def proxy(path):
     try:
-        # Выбираем целевой сервер по процентному соотношению
-        target_server = get_target_server()
-        target_url = f"{target_server}/{path}"
+        str_path = path or ''
+        
+        match str_path.lower():
+            case('movies'): # Проксируется между монолитом и мс пока только обработка запросов к фильмам
+                # Выбираем целевой сервер по процентному соотношению
+                target_server = get_target_server()                
+            case _:
+                target_server = os.environ["MONOLITH_URL"]
+
+        target_url = f"{target_server}/api/{path}"
         
         print (f"Proxying {request.method} to: {target_url} ({SERVER_CONFIG[target_server]}% traffic)")
         
