@@ -155,15 +155,35 @@ jobs:
 
       - name: Wait for services to be ready
         run: |
-          # Ждем пока ключевые сервисы запустятся
-          timeout 180s bash -c 'until docker-compose -f docker-compose.yml ps | grep -E "(proxy-service|movies-service|events-service).*Up (healthy)"; do echo "Waiting for services..."; sleep 10; done'
+          echo "Waiting for services to be ready..."
           
-          # Проверяем здоровье прокси-сервиса
-          echo "Checking proxy service health..."
-          curl --retry 15 --retry-delay 10 --retry-all-errors --max-time 30 http://localhost:8000/health
+          # Функция для проверки сервиса
+          check_service() {
+            local service=$1
+            local port=$2
+            local endpoint=${3:-/health}
+            
+            echo "Checking $service..."
+            for i in {1..12}; do
+              if curl -f -s http://localhost:$port$endpoint > /dev/null; then
+                echo "✓ $service is ready!"
+                return 0
+              else
+                echo "Attempt $i: $service not ready yet..."
+                sleep 5
+              fi
+            done
+            echo "❌ $service failed to start within 60 seconds"
+            docker-compose logs $service
+            return 1
+          }
           
-          # Даем дополнительное время для полной инициализации
-          sleep 20
+          # Проверяем ключевые сервисы
+          check_service "proxy" "8000" "/health" || exit 1
+          check_service "movies-service" "8081" "/health" || exit 1
+          check_service "events-service" "8082" "/health" || exit 1
+          
+          echo "All services are ready!"
 
       - name: Run API tests
         run: |
