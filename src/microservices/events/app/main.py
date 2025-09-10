@@ -46,9 +46,9 @@ class KafkaProducer:
             'retries': 5,   # Увеличиваем количество попыток
             'retry.backoff.ms': 1000,  # Задержка между попытками
             'compression.type': 'lz4',
-            'message.timeout.ms': 15000,  # Таймаут сообщения 15 секунд
-            'socket.timeout.ms': 10000,   # Таймаут сокета
-            'request.timeout.ms': 10000,  # Таймаут запроса
+            'message.timeout.ms': 55000,  # Таймаут сообщения 45 секунд
+            'socket.timeout.ms': 30000,   # Таймаут сокета
+            'request.timeout.ms': 30000,  # Таймаут запроса
             'max.in.flight.requests.per.connection': 1,  # Для точной доставки
             'enable.idempotence': True,   # Идемпотентность
             'on_delivery': self.delivery_report
@@ -172,7 +172,6 @@ class KafkaProducer:
         if remaining > 0:
             g__logger.warning(f"{remaining} сообщений остались неотправленными после таймаута сброса")
         return remaining
-
 class EventService:    
     @staticmethod
     def create_event(event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -187,104 +186,50 @@ class EventService:
         }
         
         try:
-            # Асинхронная отправка без немедленного ожидания
+            # Синхронная отправка с ожиданием подтверждения
             future = g__kafka_producer.produce_message(
                 topic=TOPICS[event_type],
                 key=event_id,
                 value=event
             )
             
-            # Немедленный ответ, что сообщение принято в обработку
-            response = {
-                "status": "accepted",
-                "event_id": event_id,
-                "message": "Событие принято в обработку",
-                "timestamp": get_iso8601_utc(),
-                "event": event
-            }
-            
-            g__logger.info(f"Событие {event_type} принято в обработку: {event_id}")
-            
-            # Асинхронная проверка доставки (опционально)
-            def check_delivery():
-                try:
-                    delivery_info = future.result(timeout=10.0)
-                    g__logger.info(f"Событие {event_id} доставлено: {delivery_info}")
-                except Exception as e:
-                    g__logger.error(f"Ошибка доставки события {event_id}: {e}")
-            
-            # Запустить проверку в фоновом режиме
-            import threading
-            thread = threading.Thread(target=check_delivery, daemon=True)
-            thread.start()
-            
-            return response
-            
-        except Exception as e:
-            g__logger.error(f"Ошибка отправки в Kafka: {e}")
-            raise
+            # Ожидать подтверждение доставки с таймаутом
+            try:
+                g__logger.info(f"Начало ожидания подтверждения для {event_id}")
+                delivery_info = future.result(timeout=30.0)
+                g__logger.info(f"Подтверждение получено для {event_id}")
 
+                response = {
+                    "status": "success",  # Изменено с "accepted" на "success"
+                    "event_id": event_id,
+                    "topic": delivery_info['topic'],
+                    "partition": delivery_info['partition'],
+                    "offset": delivery_info['offset'],
+                    "timestamp": get_iso8601_utc(),
+                    "event": event
+                }
+                
+                g__logger.info(f"Успешно создано событие {event_type}: {event_id}")
+                return response
+            
+            except TimeoutError:
+                g__logger.warning(f"Таймаут доставки Kafka для события {event_id}")
+                # Вернуть статус processing вместо accepted
+                return {
+                    "status": "processing",
+                    "event_id": event_id,
+                    "message": "Событие обрабатывается, подтверждение доставки ожидается",
+                    "timestamp": get_iso8601_utc(),
+                    "event": event
+                }
+                
+        except Exception as e:        
+            g__logger.error(f"Глобальная ошибка отправки в Kafka: {str(e)}")
+            g__logger.error(f"Трассировка ошибки отправки: {traceback.format_exc()}")
+        raise
+                        
 # Инициализация Kafka producer
 g__kafka_producer = KafkaProducer(KAFKA_BROKERS)
-
-# class EventService:    
-#     @staticmethod
-#     def create_event(event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-#         # Создать событие и отправить в Kafka с реальным отслеживанием доставки
-#         event_id = str(uuid.uuid4())
-#         timestamp = get_iso8601_utc()
-        
-#         event = {
-#             "id": event_id,
-#             "type": event_type,
-#             "timestamp": timestamp,
-#             "payload": payload
-#         }
-        
-#         # Отправка в Kafka с реальным отслеживанием доставки
-#         try:
-#             future = g__kafka_producer.produce_message(
-#                 topic=TOPICS[event_type],
-#                 key=event_id,
-#                 value=event
-#             )
-            
-#             # Ожидать подтверждение доставки с таймаутом
-#             try:
-#                 delivery_info = future.result(timeout=10.0)  # Таймаут ожидания ответа Kafka
-                
-#                 response = {
-#                     "status": "success",
-#                     "event_id": event_id,
-#                     "topic": delivery_info['topic'],
-#                     "partition": delivery_info['partition'],
-#                     "offset": delivery_info['offset'],
-#                     "timestamp": get_iso8601_utc(),
-#                     "event": event
-#                 }
-                
-#                 g__logger.info(f"Успешно создано событие {event_type}: {event_id}")
-#                 return response
-                
-#             except TimeoutError:
-#                 g__logger.warning(f"Таймаут доставки Kafka для события {event_id}")
-#                 # Сообщение все еще может быть доставлено в конечном итоге
-#                 return {
-#                     "status": "processing",
-#                     "event_id": event_id,
-#                     "message": "Событие обрабатывается, подтверждение доставки ожидается",
-#                     "timestamp": get_iso8601_utc(),
-#                     "event": event
-#                 }
-                
-#             except Exception as e:                
-#                 g__logger.error(f"Ошибка доставки Kafka для события event ID is {event_id}, description: {str(e)}")
-#                 raise
-            
-#         except Exception as e:        
-#             g__logger.error(f"Глобальная ошибка отправки в Kafka: {str(e)}")
-#             g__logger.error(f"Трассировка ошибки отправки: {traceback.format_exc()}")
-#             raise
 
 # Проверка готовности сервиса с реальной проверкой подключения к Kafka
 @__app.route(SVC_ROOT_URL.format('health'), methods=['GET'])
