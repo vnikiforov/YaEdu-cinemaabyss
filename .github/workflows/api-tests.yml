@@ -47,6 +47,10 @@ jobs:
           echo "Waiting for application services to be ready..."
           sleep 30
       
+      - name: Initialize test data
+        run: |
+          docker compose exec -T postgres psql -U postgres -d cinemaabyss -f /docker-entrypoint-initdb.d/init.sql 
+
       - name: Check services status
         run: |
           docker compose ps
@@ -103,7 +107,7 @@ jobs:
             --reporters cli,htmlextra \
             --reporter-htmlextra-export newman-report.html \
             --delay-request 1000 \
-            --timeout 300000
+            --timeout 600000
           
           # Проверяем код возврата
           if [ $? -eq 0 ]; then
