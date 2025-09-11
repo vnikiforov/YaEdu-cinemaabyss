@@ -1,113 +1,181 @@
+# values.yaml
 # Global settings
 global:
   namespace: cinemaabyss
   domain: cinemaabyss.example.com
+  configMapName: cinemaabyss-config
+  secretName: cinemaabyss-secrets
+  imagePullSecret: dockerconfigjson 
 
 # Image pull secrets
 imagePullSecrets:
-  dockerconfigjson: ewoJImF1dGhzIjogewoJCSJnaGNyLmlvIjogewoJCQkiYXV0aCI6
+ - name: dockerconfigjson
+   data: eyJhdXRocyI6eyJnaGNyLmlvIjp7ImF1dGgiOiJkbTVwYTJsbWIzSnZkanBuYVhSb2RXSmZjR0YwWHpFeFFVSlFNazlhU1RCQk16SkllRUY1VWtaR1NVZGZSMnN6WWs1R05WSnNaME5FZEdKNmNESkpTVEZXT1docVdXMURWbmRpZDNwbGJISkJUMjQyWjJOVWRWTkxOelF5Ums0eVJFMUdXbFkxVmprPSJ9fX0K
+
 # Database configuration
 database:
+  enabled: true
   host: postgres
   port: 5432
   name: cinemaabyss
   user: postgres
-  password: cG9zdGdyZXNfcGFzc3dvcmQ=
+  password: postgres_password
   image:
     repository: postgres
-    tag: 14
+    tag: "14"
     pullPolicy: IfNotPresent
   resources:
     limits:
-      cpu: 1000m
-      memory: 1Gi
+      cpu: "1000m"
+      memory: "1Gi"
     requests:
-      cpu: 500m
-      memory: 512Mi
+      cpu: "500m"
+      memory: "512Mi"
   persistence:
     enabled: true
-    size: 10Gi
+    size: "10Gi"
     accessMode: ReadWriteOnce
+  env:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres_password
+    POSTGRES_DB: cinemaabyss
 
 # Monolith configuration
 monolith:
   enabled: true
   image:
-    repository: ghcr.io/db-exp/cinemaabysstest/monolith
+    repository: ghcr.io/vnikiforov/yaedu-cinemaabyss/monolith
     tag: latest
     pullPolicy: Always
   replicas: 1
+  containerPort: 8080
   resources:
     limits:
-      cpu: 500m
-      memory: 512Mi
+      cpu: "500m"
+      memory: "512Mi"
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: "100m"
+      memory: "128Mi"
   service:
     port: 8080
     targetPort: 8080
     type: ClusterIP
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  env:
+    PORT: "8080"  # ← ИСПРАВЛЕНО: добавлены кавычки
+    DB_CONNECTION_STRING: "postgres://postgres:{{ .Values.database.password }}@{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode=disable"
 
 # Proxy service configuration
 proxyService:
   enabled: true
   image:
-    repository: ghcr.io/db-exp/cinemaabysstest/proxy-service
+    repository: ghcr.io/vnikiforov/yaedu-cinemaabyss/proxy-service
     tag: latest
     pullPolicy: Always
   replicas: 1
+  containerPort: 8000
   resources:
     limits:
-      cpu: 300m
-      memory: 256Mi
+      cpu: "300m"
+      memory: "256Mi"
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: "100m"
+      memory: "128Mi"
   service:
-    port: 80
+    port: 8000
     targetPort: 8000
     type: ClusterIP
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  env:
+    PORT: "8000"  # ← ИСПРАВЛЕНО: добавлены кавычки
+    MONOLITH_URL: "http://monolith:8080"
+    MOVIES_SERVICE_URL: "http://movies-service:8081"
+    EVENTS_SERVICE_URL: "http://events-service:8082"
+    GRADUAL_MIGRATION: "true"
+    MOVIES_MIGRATION_PERCENT: "50"
 
 # Movies service configuration
 moviesService:
   enabled: true
   image:
-    repository: ghcr.io/db-exp/cinemaabysstest/movies-service
+    repository: ghcr.io/vnikiforov/yaedu-cinemaabyss/movies-service
     tag: latest
     pullPolicy: Always
   replicas: 1
+  containerPort: 8081
   resources:
     limits:
-      cpu: 300m
-      memory: 256Mi
+      cpu: "300m"
+      memory: "256Mi"
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: "100m"
+      memory: "128Mi"
   service:
     port: 8081
     targetPort: 8081
     type: ClusterIP
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  env:
+    PORT: "8081"  # ← ИСПРАВЛЕНО: добавлены кавычки
+    DB_CONNECTION_STRING: "postgres://postgres:{{ .Values.database.password }}@{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode=disable"
 
 # Events service configuration
 eventsService:
   enabled: true
   image:
-    repository: ghcr.io/db-exp/cinemaabysstest/events-service
+    repository: ghcr.io/vnikiforov/yaedu-cinemaabyss/events-service
     tag: latest
     pullPolicy: Always
   replicas: 1
+  containerPort: 8082
+  kafkaBrokers: "kafka:9092"
   resources:
     limits:
-      cpu: 300m
-      memory: 256Mi
+      cpu: "300m"
+      memory: "256Mi"
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: "100m"
+      memory: "128Mi"
   service:
     port: 8082
     targetPort: 8082
     type: ClusterIP
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  env:
+    PORT: "8082"  # ← ИСПРАВЛЕНО: добавлены кавычки
+    KAFKA_BROKERS: "kafka:9092"
 
 # Kafka configuration
 kafka:
@@ -119,25 +187,24 @@ kafka:
   replicas: 1
   resources:
     limits:
-      cpu: 1000m
-      memory: 1Gi
+      cpu: "1000m"
+      memory: "1Gi"
     requests:
-      cpu: 200m
-      memory: 512Mi
+      cpu: "200m"
+      memory: "512Mi"
   persistence:
     enabled: true
-    size: 5Gi
+    size: "5Gi"
     accessMode: ReadWriteOnce
-  topics:
-    - name: movie-events
-      partitions: 1
-      replicationFactor: 1
-    - name: user-events
-      partitions: 1
-      replicationFactor: 1
-    - name: payment-events
-      partitions: 1
-      replicationFactor: 1
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  env:
+    KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+    KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092"
+    KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+    KAFKA_CREATE_TOPICS: "movie-events:1:1,user-events:1:1,payment-events:1:1"
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
 # Zookeeper configuration
 zookeeper:
@@ -149,37 +216,48 @@ zookeeper:
   replicas: 1
   resources:
     limits:
-      cpu: 500m
-      memory: 512Mi
+      cpu: "500m"
+      memory: "512Mi"
     requests:
-      cpu: 100m
-      memory: 256Mi
+      cpu: "100m"
+      memory: "256Mi"
   persistence:
     enabled: true
-    size: 1Gi
+    size: "1Gi"
     accessMode: ReadWriteOnce
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
 
 # Ingress configuration
 ingress:
   enabled: true
   className: nginx
   annotations:
-    kubernetes.io/ingress.class: nginx
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
   hosts:
     - host: cinemaabyss.example.com
       paths:
-        - path: /
-          pathType: Prefix
-          service: proxy-service
-          port: 80
-        - path: /api/events
-          pathType: Prefix
-          service: events-service
-          port: 8082
+        - path: /()(.*)
+          pathType: ImplementationSpecific
+          serviceName: proxy-service
+          servicePort: 8000
+        - path: /events-service(/|$)(.*)
+          pathType: ImplementationSpecific
+          serviceName: events-service
+          servicePort: 8082
+        - path: /movies-service(/|$)(.*)
+          pathType: ImplementationSpecific
+          serviceName: movies-service
+          servicePort: 8081
+        - path: /monolith(/|$)(.*)
+          pathType: ImplementationSpecific
+          serviceName: monolith
+          servicePort: 8080
 
 # Application configuration
 config:
-  # Strangler Fig configuration
   gradualMigration: "true"
-  moviesMigrationPercent: "100"
+  moviesMigrationPercent: "50"
