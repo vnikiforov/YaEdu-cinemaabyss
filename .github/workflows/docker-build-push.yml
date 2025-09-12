@@ -163,6 +163,7 @@ jobs:
       kafka:
         image: wurstmeister/kafka:2.13-2.7.0
         env:
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
           KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
           KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
         options: >-
@@ -211,9 +212,9 @@ jobs:
             sleep 5
           done
           
-          # Ждем готовности Kafka
+          # Ждем готовности Kafka через zookeeper
           for i in {1..30}; do
-            if nc -z localhost 9092; then
+            if echo "ls /brokers/ids" | docker-compose exec -T zookeeper zookeeper-shell localhost:2181 | grep -q "broker"; then
               echo "Kafka is ready!"
               break
             fi
@@ -363,3 +364,4 @@ jobs:
         if: always()
         run: |
           docker-compose down -v --remove-orphans
+          
