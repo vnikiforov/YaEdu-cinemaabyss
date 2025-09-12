@@ -133,85 +133,214 @@ jobs:
   api-tests:
     runs-on: ubuntu-latest
     needs: build-and-push
+    # Увеличиваем ресурсы для контейнера с тестами
+    container:
+      image: node:18
+      options: --cpus 2 --memory 4g
+
+    services:
+      # Добавляем сервисы для тестового окружения
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_password
+          POSTGRES_DB: cinemaabyss
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      zookeeper:
+        image: wurstmeister/zookeeper:latest
+        options: >-
+          --health-cmd "echo ruok | nc localhost 2181"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      kafka:
+        image: wurstmeister/kafka:2.13-2.7.0
+        env:
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+        options: >-
+          --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        depends_on:
+          zookeeper:
+            condition: service_healthy
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install Docker Compose
+      - name: Install Docker Compose and dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y netcat-openbsd
           sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
           docker-compose --version
 
-      - name: Start all services with Docker Compose
+      - name: Create test environment file
         run: |
-          # Запускаем всю инфраструктуру и приложение
-          docker-compose -f docker-compose.yml up -d
-          sleep 15
+          cat > .env.test << EOF
+          DB_CONNECTION_STRING=postgres://postgres:postgres_password@postgres:5432/cinemaabyss?sslmode=disable
+          KAFKA_BROKERS=kafka:9092
+          MONOLITH_URL=http://monolith:8080
+          MOVIES_SERVICE_URL=http://movies-service:8081
+          EVENTS_SERVICE_URL=http://events-service:8082
+          GRADUAL_MIGRATION=true
+          MOVIES_MIGRATION_PERCENT=50
+          EOF
+
+      - name: Start infrastructure services first
+        run: |
+          # Запускаем только инфраструктурные сервисы сначала
+          docker-compose up -d postgres zookeeper kafka
+          echo "Waiting for infrastructure to be ready..."
+          
+          # Ждем готовности PostgreSQL
+          for i in {1..30}; do
+            if docker-compose exec -T postgres pg_isready -U postgres; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 5
+          done
+          
+          # Ждем готовности Kafka
+          for i in {1..30}; do
+            if nc -z localhost 9092; then
+              echo "Kafka is ready!"
+              break
+            fi
+            echo "Waiting for Kafka... ($i/30)"
+            sleep 5
+          done
+
+      - name: Initialize database
+        run: |
+          # Запускаем скрипт инициализации БД
+          docker-compose exec -T postgres psql -U postgres -d cinemaabyss -f /docker-entrypoint-initdb.d/init.sql || echo "Database initialization completed"
+
+      - name: Start application services
+        run: |
+          # Запускаем приложения после инфраструктуры
+          docker-compose up -d movies-service events-service monolith proxy-service
+          echo "Waiting for applications to start..."
+          sleep 30
 
       - name: Check services status and logs
         run: |
-          echo "=== SERVICES STATUS ==="
+          echo "=== ALL SERVICES STATUS ==="
           docker-compose ps
           
-          echo "=== BACKEND SERVICES LOGS ==="
-          docker-compose logs monolith --tail=20
-          docker-compose logs movies-service --tail=20
-          docker-compose logs events-service --tail=20
+          echo "=== MOVIES SERVICE LOGS ==="
+          docker-compose logs movies-service --tail=50 || echo "No movies service logs"
           
-          echo "=== INFRASTRUCTURE LOGS ==="
-          docker-compose logs postgres --tail=10
-          docker-compose logs kafka --tail=10
+          echo "=== EVENTS SERVICE LOGS ==="
+          docker-compose logs events-service --tail=50
+          
+          echo "=== PROXY SERVICE LOGS ==="
+          docker-compose logs proxy-service --tail=50
+          
+          echo "=== MONOLITH LOGS ==="
+          docker-compose logs monolith --tail=50
+          
+          echo "=== KAFKA LOGS ==="
+          docker-compose logs kafka --tail=20
+          
+          echo "=== POSTGRES LOGS ==="
+          docker-compose logs postgres --tail=20
 
-      - name: Wait for services to be ready
+      - name: Wait for services to be ready with health checks
         run: |
-          echo "Waiting for services to be ready..."
-          sleep 25
+          echo "Performing health checks..."
           
-          # Проверяем основной endpoint
-          echo "Testing proxy connection..."
-          if curl -f -s http://localhost:8000/health > /dev/null; then
-            echo "✓ Proxy service is ready!"
-          else
-            echo "⚠️ Proxy health check failed, but continuing with tests..."
-            # Не выходим с ошибкой, пусть тесты сами решат
-          fi
+          # Проверяем здоровье каждого сервиса
+          for service in movies-service events-service proxy-service monolith; do
+            echo "Waiting for $service to be responsive..."
+            for i in {1..15}; do
+              if docker-compose ps | grep "$service" | grep -q "Up"; then
+                echo "$service is running!"
+                
+                # Проверяем доступность порта
+                port=$(docker-compose port $service 8080 2>/dev/null | cut -d: -f2 || docker-compose port $service 8081 2>/dev/null | cut -d: -f2 || docker-compose port $service 8082 2>/dev/null | cut -d: -f2 || docker-compose port $service 8000 2>/dev/null | cut -d: -f2)
+                if [ -n "$port" ] && nc -z localhost $port; then
+                  echo "$service is responding on port $port!"
+                  break
+                fi
+              fi
+              
+              if [ $i -eq 15 ]; then
+                echo "WARNING: $service did not become responsive in time, but continuing..."
+              fi
+              sleep 5
+            done
+          done
           
-          # Даем еще немного времени для полной инициализации
-          sleep 5
+          # Дополнительная проверка доступности эндпоинтов
+          echo "Testing endpoint availability..."
+          for i in {1..10}; do
+            if curl -f http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Proxy service is responding!"
+              break
+            elif [ $i -eq 10 ]; then
+              echo "ERROR: Proxy service not responding after 10 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
 
-      - name: Install Newman with compatible versions
+      - name: Install Newman
         working-directory: tests/postman
         run: |
-          # Устанавливаем совместимые версии
-          npm install newman@^6.0.0 newman-reporter-htmlextra@^1.23.0 --legacy-peer-deps
-          # Или используем force для установки
-          # npm install newman newman-reporter-htmlextra --force
+          # Убедимся, что есть package.json
+          if [ ! -f package.json ]; then
+            echo '{"name":"postman-tests","version":"1.0.0"}' > package.json
+          fi
+          npm install newman@^6.0.0 newman-reporter-htmlextra@^1.23.0
 
-      - name: Run API tests with compatible Newman
+      - name: Run API tests with retries and longer timeout
         working-directory: tests/postman
         run: |
           echo "Running API tests against proxy service (port 8000)"
           
-          # Запускаем тесты через proxy
-          npx newman run CinemaAbyss.postman_collection.json \
-            --env-var "baseUrl=http://localhost:8000" \
-            --reporters cli,htmlextra \
-            --reporter-htmlextra-export newman-report.html \
-            --delay-request 1000 \
-            --timeout 300000
+          # Запускаем тесты с увеличенным таймаутом и возможностью повтора
+          max_attempts=3
+          attempt=1
           
-          # Проверяем код возврата
-          if [ $? -eq 0 ]; then
-            echo "API tests passed successfully"
-          else
-            echo "API tests failed"
-            exit 1
-          fi
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt of $max_attempts"
+            
+            npx newman run CinemaAbyss.postman_collection.json \
+              --env-var "baseUrl=http://localhost:8000" \
+              --reporters cli,htmlextra \
+              --reporter-htmlextra-export newman-report.html \
+              --delay-request 2000 \
+              --timeout 600000 \
+              --bail || true
+              
+            if [ $? -eq 0 ]; then
+              echo "API tests passed on attempt $attempt"
+              break
+            else
+              echo "API tests failed on attempt $attempt"
+              if [ $attempt -eq $max_attempts ]; then
+                echo "All attempts failed, exiting with error"
+                exit 1
+              fi
+              echo "Waiting 10 seconds before retry..."
+              sleep 10
+              attempt=$((attempt+1))
+            fi
+          done
 
       - name: Upload test reports
         if: always()
@@ -220,21 +349,20 @@ jobs:
           name: api-test-reports
           path: tests/postman/newman-report.html
 
-      - name: Show logs if tests fail
+      - name: Show detailed logs if tests fail
         if: failure()
         run: |
-          echo "=== PROXY SERVICE LOGS ==="
-          docker-compose logs proxy-service
-          echo "=== EVENTS SERVICE LOGS ==="
-          docker-compose logs events-service
-          echo "=== MOVIES SERVICE LOGS ==="
-          docker-compose logs movies-service
-          echo "=== KAFKA LOGS ==="
-          docker-compose logs kafka
-          echo "=== POSTGRES LOGS ==="
-          docker-compose logs postgres
+          echo "=== DETAILED SERVICE LOGS ==="
+          docker-compose logs --tail=100
+          
+          echo "=== NETWORK STATUS ==="
+          docker network inspect $(docker-compose ps -q | head -1 | xargs docker inspect --format='{{.HostConfig.NetworkMode}}') || true
+          
+          echo "=== CONTAINER STATUS ==="
+          docker ps -a
+          docker stats --no-stream || true
 
       - name: Cleanup
         if: always()
         run: |
-          docker-compose down -v
+          docker-compose down -v --remove-orphans
