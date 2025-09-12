@@ -1,0 +1,54 @@
+@startuml
+title CineAbyss Future Structure
+
+left to right direction
+
+!includeurl lib/C4_Container.puml
+
+Person(user, "CineMan", "Пользователь портала  КиноБездна")
+
+Enterprise_Boundary(Domains, "Домены системы") {  
+
+  Container_Boundary(ContolCenter, "Домен управления") {    
+    Container(AuthSvc, "Authorization Service")  
+    Container(GateAPI, "External API Gate")
+    Container(RequestsRouter, "Internal Request Router")    
+  }
+
+  Container_Boundary(UserMgmnt, "Домен пользователя") {
+    Container(UsrPrefs, "User Preferences")
+    Container(ViewHstry, "Media View History")
+    Container(UsrFvtrs, "Favorites")
+    Container(UsrDscnt, "Discounts")
+    Container(UsrSubscrb, "Subscriptions")
+  }
+
+  Container_Boundary(MediaRegion, "Домен медиа-контента") {    
+    Container(MovieSvs, "Video and Movies Show")
+    Container_Boundary(ExtSystems, "Внешние интеграции") {    
+      System_Ext(PmntGate, "Payment System Facade")
+      System_Ext(RcmndSys, "Recomendation System")
+      System_Ext(GrdSys, "Rating System")
+    }
+  }
+
+  Container_Boundary(SysArea, "Домен системной поддержи") {    
+    Container(HwSupport, "User MediaHard")
+    Container(UiBuilder, "UI Builder System")
+    Container(LoggingSys, "Logging System")
+    ContainerQueue(QueueSvc, "Messages Broker")
+    ContainerDb(DbSvc, "DataBase System")
+  }
+}
+
+Rel(user, AuthSvc, "Get user info - role & rights")
+Rel(AuthSvc, user, "")
+Rel(user, RequestsRouter, "")
+Rel(GateAPI, AuthSvc, "")
+Rel(GateAPI, RequestsRouter, "")
+Rel(RequestsRouter, SysArea, "")
+Rel(RequestsRouter, ContolCenter, "")
+Rel(RequestsRouter, MediaRegion, "")
+Rel(RequestsRouter, UserMgmnt, "")
+
+@enduml

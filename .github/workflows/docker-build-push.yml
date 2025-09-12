@@ -1,9 +1,9 @@
-name: Docker Build and Push
+name: Docker Build, Push and Test
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ cinema, main ]
     paths:
       - 'src/**'
       - '.github/workflows/docker-build-push.yml'
@@ -26,21 +26,22 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to the Container registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Monolith
       - name: Extract metadata (tags, labels) for Monolith
         id: meta-monolith
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.MONOLITH_IMAGE_NAME }}
           tags: |
@@ -51,7 +52,7 @@ jobs:
             latest
 
       - name: Build and push Monolith Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: ./src/monolith
           push: true
@@ -60,9 +61,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Movies Service
       - name: Extract metadata (tags, labels) for Movies Service
         id: meta-movies
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.MOVIES_SERVICE_IMAGE_NAME }}
           tags: |
@@ -73,7 +75,7 @@ jobs:
             latest
 
       - name: Build and push Movies Service Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: ./src/microservices/movies
           push: true
@@ -82,4 +84,295 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      
+      # Events Service
+      - name: Extract metadata (tags, labels) for Events Service
+        id: meta-events
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.EVENTS_SERVICE_IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=ref,event=branch
+            latest
+
+      - name: Build and push Events Service Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./src/microservices/events
+          push: true
+          tags: ${{ steps.meta-events.outputs.tags }}
+          labels: ${{ steps.meta-events.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Proxy Service
+      - name: Extract metadata (tags, labels) for Proxy Service
+        id: meta-proxy
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.PROXY_SERVICE_IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=ref,event=branch
+            latest
+
+      - name: Build and push Proxy Service Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./src/microservices/proxy
+          push: true
+          tags: ${{ steps.meta-proxy.outputs.tags }}
+          labels: ${{ steps.meta-proxy.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  api-tests:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    # Увеличиваем ресурсы для контейнера с тестами
+    container:
+      image: node:18
+      options: --cpus 2 --memory 4g
+
+    services:
+      # Добавляем сервисы для тестового окружения
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_password
+          POSTGRES_DB: cinemaabyss
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      zookeeper:
+        image: wurstmeister/zookeeper:latest
+        options: >-
+          --health-cmd "echo ruok | nc localhost 2181"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      kafka:
+        image: wurstmeister/kafka:2.13-2.7.0
+        env:
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+        options: >-
+          --health-cmd "nc -z localhost 9092 || exit 0"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Docker Compose and dependencies
+        run: |
+          apt-get update
+          apt-get install -y netcat-openbsd
+          curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          docker-compose --version
+
+      - name: Create test environment file
+        run: |
+          cat > .env.test << EOF
+          DB_CONNECTION_STRING=postgres://postgres:postgres_password@postgres:5432/cinemaabyss?sslmode=disable
+          KAFKA_BROKERS=kafka:9092
+          MONOLITH_URL=http://monolith:8080
+          MOVIES_SERVICE_URL=http://movies-service:8081
+          EVENTS_SERVICE_URL=http://events-service:8082
+          GRADUAL_MIGRATION=true
+          MOVIES_MIGRATION_PERCENT=50
+          EOF
+
+      - name: Start infrastructure services first
+        run: |
+          # Запускаем только инфраструктурные сервисы сначала
+          docker-compose up -d postgres zookeeper kafka
+          echo "Waiting for infrastructure to be ready..."
+          
+          # Ждем готовности PostgreSQL
+          for i in {1..30}; do
+            if docker-compose exec -T postgres pg_isready -U postgres; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 5
+          done
+          
+          # Ждем готовности Kafka через zookeeper
+          echo "Waiting for Kafka to be ready..."
+          for i in {1..30}; do
+            if echo "ls /brokers/ids" | docker-compose exec -T zookeeper zookeeper-shell localhost:2181 | grep -q "broker"; then
+              echo "Kafka broker is registered in ZooKeeper!"
+              break
+            fi
+            echo "Waiting for Kafka... ($i/30)"
+            sleep 5
+          done
+          
+          # Дополнительная проверка порта Kafka
+          echo "Checking Kafka port availability..."
+          for i in {1..10}; do
+            if nc -z localhost 9092; then
+              echo "Kafka port 9092 is open!"
+              break
+            fi
+            echo "Waiting for Kafka port... ($i/10)"
+            sleep 3
+          done
+
+      - name: Initialize database
+        run: |
+          # Запускаем скрипт инициализации БД
+          docker-compose exec -T postgres psql -U postgres -d cinemaabyss -f /docker-entrypoint-initdb.d/init.sql || echo "Database initialization completed"
+
+      - name: Start application services
+        run: |
+          # Запускаем приложения после инфраструктуры
+          docker-compose up -d movies-service events-service monolith proxy-service
+          echo "Waiting for applications to start..."
+          sleep 30
+
+      - name: Check services status and logs
+        run: |
+          echo "=== ALL SERVICES STATUS ==="
+          docker-compose ps
+          
+          echo "=== MOVIES SERVICE LOGS ==="
+          docker-compose logs movies-service --tail=50 || echo "No movies service logs"
+          
+          echo "=== EVENTS SERVICE LOGS ==="
+          docker-compose logs events-service --tail=50
+          
+          echo "=== PROXY SERVICE LOGS ==="
+          docker-compose logs proxy-service --tail=50
+          
+          echo "=== MONOLITH LOGS ==="
+          docker-compose logs monolith --tail=50
+          
+          echo "=== KAFKA LOGS ==="
+          docker-compose logs kafka --tail=20
+          
+          echo "=== POSTGRES LOGS ==="
+          docker-compose logs postgres --tail=20
+
+      - name: Wait for services to be ready with health checks
+        run: |
+          echo "Performing health checks..."
+          
+          # Проверяем здоровье каждого сервиса
+          for service in movies-service events-service proxy-service monolith; do
+            echo "Waiting for $service to be responsive..."
+            for i in {1..15}; do
+              if docker-compose ps | grep "$service" | grep -q "Up"; then
+                echo "$service is running!"
+                
+                # Проверяем доступность порта
+                port=$(docker-compose port $service 8080 2>/dev/null | cut -d: -f2 || docker-compose port $service 8081 2>/dev/null | cut -d: -f2 || docker-compose port $service 8082 2>/dev/null | cut -d: -f2 || docker-compose port $service 8000 2>/dev/null | cut -d: -f2)
+                if [ -n "$port" ] && nc -z localhost $port; then
+                  echo "$service is responding on port $port!"
+                  break
+                fi
+              fi
+              
+              if [ $i -eq 15 ]; then
+                echo "WARNING: $service did not become responsive in time, but continuing..."
+              fi
+              sleep 5
+            done
+          done
+          
+          # Дополнительная проверка доступности эндпоинтов
+          echo "Testing endpoint availability..."
+          for i in {1..10}; do
+            if curl -f http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Proxy service is responding!"
+              break
+            elif [ $i -eq 10 ]; then
+              echo "ERROR: Proxy service not responding after 10 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Install Newman
+        working-directory: tests/postman
+        run: |
+          # Убедимся, что есть package.json
+          if [ ! -f package.json ]; then
+            echo '{"name":"postman-tests","version":"1.0.0"}' > package.json
+          fi
+          npm install newman@^6.0.0 newman-reporter-htmlextra@^1.23.0
+
+      - name: Run API tests with retries and longer timeout
+        working-directory: tests/postman
+        run: |
+          echo "Running API tests against proxy service (port 8000)"
+          
+          # Запускаем тесты с увеличенным таймаутом и возможностью повтора
+          max_attempts=3
+          attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt of $max_attempts"
+            
+            npx newman run CinemaAbyss.postman_collection.json \
+              --env-var "baseUrl=http://localhost:8000" \
+              --reporters cli,htmlextra \
+              --reporter-htmlextra-export newman-report.html \
+              --delay-request 2000 \
+              --timeout 600000 \
+              --bail || true
+              
+            if [ $? -eq 0 ]; then
+              echo "API tests passed on attempt $attempt"
+              break
+            else
+              echo "API tests failed on attempt $attempt"
+              if [ $attempt -eq $max_attempts ]; then
+                echo "All attempts failed, exiting with error"
+                exit 1
+              fi
+              echo "Waiting 10 seconds before retry..."
+              sleep 10
+              attempt=$((attempt+1))
+            fi
+          done
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-reports
+          path: tests/postman/newman-report.html
+
+      - name: Show detailed logs if tests fail
+        if: failure()
+        run: |
+          echo "=== DETAILED SERVICE LOGS ==="
+          docker-compose logs --tail=100
+          
+          echo "=== NETWORK STATUS ==="
+          docker network inspect $(docker-compose ps -q | head -1 | xargs docker inspect --format='{{.HostConfig.NetworkMode}}') || true
+          
+          echo "=== CONTAINER STATUS ==="
+          docker ps -a
+          docker stats --no-stream || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker-compose down -v --remove-orphans

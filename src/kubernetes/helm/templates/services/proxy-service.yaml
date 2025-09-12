@@ -16,16 +16,60 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+      maxSurge: {{ .Values.proxyService.rollingUpdate.maxSurge | default 1 }}
+      maxUnavailable: {{ .Values.proxyService.rollingUpdate.maxUnavailable | default 0 }}
   template:
     metadata:
       labels:
         app: proxy-service
+        app.kubernetes.io/name: {{ include "cinemaabyss.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       containers:
       - name: proxy-service
-        ..... тут
+        image: {{ .Values.proxyService.image.repository }}:{{ .Values.proxyService.image.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.proxyService.image.pullPolicy | default "Always" }}
+        ports:
+        - containerPort: {{ .Values.proxyService.containerPort | default 8000 }}
+        env:
+        - name: PORT
+          value: "{{ .Values.proxyService.containerPort | default 8000 }}"
+        - name: MONOLITH_URL
+          value: {{ printf "http://monolith:%v" (.Values.monolith.service.port | default 8080) | quote }}
+        - name: MOVIES_SERVICE_URL
+          value: {{ printf "http://movies-service:%v" (.Values.moviesService.service.port | default 8081) | quote }}
+        - name: EVENTS_SERVICE_URL
+          value: {{ printf "http://events-service:%v" (.Values.eventsService.service.port | default 8082) | quote }}
+        - name: GRADUAL_MIGRATION
+          value: {{ .Values.config.gradualMigration | default "true" | quote }}
+        - name: MOVIES_MIGRATION_PERCENT
+          value: {{ .Values.config.moviesMigrationPercent | default "50" | quote }}
+        - name: DB_CONNECTION_STRING
+          value: "postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable"
+        envFrom:
+        - configMapRef:
+            name: {{ .Values.global.configMapName | default "cinemaabyss-config" }}
+        - secretRef:
+            name: {{ .Values.global.secretName | default "cinemaabyss-secrets" }}
+        resources:
+          {{- toYaml .Values.proxyService.resources | nindent 10 }}
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.proxyService.containerPort | default 8000 }}
+          initialDelaySeconds: {{ .Values.proxyService.readinessProbe.initialDelaySeconds | default 5 }}
+          periodSeconds: {{ .Values.proxyService.readinessProbe.periodSeconds | default 10 }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.proxyService.containerPort | default 8000 }}
+          initialDelaySeconds: {{ .Values.proxyService.livenessProbe.initialDelaySeconds | default 15 }}
+          periodSeconds: {{ .Values.proxyService.livenessProbe.periodSeconds | default 20 }}
+      {{- if .Values.global.imagePullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.global.imagePullSecret }}
+      {{- end }}  
+      restartPolicy: Always
 ---
 apiVersion: v1
 kind: Service
@@ -38,5 +82,9 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   selector:
-    ... и тут
+    app: proxy-service
+  ports:
+  - port: {{ .Values.proxyService.service.port | default 8000 }}
+    targetPort: {{ .Values.proxyService.containerPort | default 8000 }}
+  type: {{ .Values.proxyService.service.type | default "ClusterIP" }}
 {{- end }}
