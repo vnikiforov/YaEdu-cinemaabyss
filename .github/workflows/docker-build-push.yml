@@ -163,16 +163,13 @@ jobs:
       kafka:
         image: wurstmeister/kafka:2.13-2.7.0
         env:
-          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
           KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
         options: >-
           --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
-        depends_on:
-          zookeeper:
-            condition: service_healthy
 
     steps:
       - name: Checkout repository
