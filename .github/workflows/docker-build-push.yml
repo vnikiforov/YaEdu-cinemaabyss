@@ -178,10 +178,10 @@ jobs:
 
       - name: Install Docker Compose and dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y netcat-openbsd
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
+          apt-get update
+          apt-get install -y netcat-openbsd
+          curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
           docker-compose --version
 
       - name: Create test environment file
